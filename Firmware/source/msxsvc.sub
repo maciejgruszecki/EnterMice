@@ -1,0 +1,30 @@
+;*** MSX service ***************************************************************
+                                        ; tacts limit 56 @12MHz (112 @24MHz)
+                                        ; data exhibit before 26 (52) tacts
+msxservice:                             ; +4  interrupt system delay + jump
+        HDW_INT_START   1               ; +6  using set #1 of GPR
+        mov     a,r7                    ; +1  load nibble counter   
+        clr     c                       ; +1
+        rrc     a                       ; +1  count msxData ptr
+        orl     a,#msxData              ; +1
+        mov     r0,a                    ; +1  store msxData ptr
+        mov     a,@r0                   ; +1  load msxData
+        jnc     msx_set                 ; +2  if ptr is odd
+        swap    a                       ; +1  then swap nibble
+msx_set:
+        anl     a,#0F0h                 ; +1  leave high nibble
+        mov     r0,a                    ; +1
+        mov     a,outBuff               ; +1  combine data to out
+        anl     a,#00Fh                 ; +1  reset msxD0..msxD3
+        orl     a,r0                    ; +1  
+        mov     outPort,a               ; +1  exhibit data  @25 tacts
+        mov     outBuff,a               ; +1  store data
+        inc     r7                      ; +1  increment nibble counter
+        TMR_START       msxComTout      ; +6  set timeout (see em.equ)
+        HDW_INT_END                     ; +6 = 39 tacts
+;*******************************************************************************
+MSXinit:
+        MSX_INIT_VARS
+        setb    IT1                     ; edge triggered
+        ret
+;*** end of {msxsvc.sub} *******************************************************
