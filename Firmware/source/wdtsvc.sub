@@ -1,0 +1,15 @@
+;*** PS/2 watchdog service *****************************************************
+wdtservice:                             ; +4 interrupt system delay + jump
+        HDW_INT_START   2               ; +6  using set #2 of GPR
+        WDT_END                         ; +2  stop timer
+        clr     PS2RxON                 ; +1  disable receiver INT
+        clr     PS2TxON                 ; +1  disable transmitter
+        setb    PS2CLK                  ; +1  release CLK line
+        setb    PS2DAT                  ; +1  release DATA line
+        setb    PS2Error                ; +1  set error flag
+        HDW_INT_END                     ; +6 = 23 tacts
+;*******************************************************************************        
+WDTinit:
+        WDT_END
+        ret 
+;*** end of {wdtsvc.sub} *******************************************************
