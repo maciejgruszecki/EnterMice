@@ -1,0 +1,334 @@
+;*** LEDs & switches ***********************************************************
+SelfTest:
+        clr     a                       
+        mov     a,#msxByteEx
+        swap    a
+        mov     msxInfoEx,a             ; store extra bytes info
+        
+        mov     a,#fw_ver_major
+        anl     a,#00Fh
+        swap    a
+        mov     r7,a
+        mov     a,#fw_ver_minor
+        anl     a,#00Fh
+        orl     a,r7
+        mov     msxFwVer,a              ; store firmware version info
+
+        mov     a,#hw_ver_major
+        anl     a,#00Fh
+        swap    a
+        mov     r7,a
+        mov     a,#hw_ver_minor
+        anl     a,#00Fh
+        orl     a,r7
+        mov     msxHwVer,a              ; store hardware version info
+        
+        mov     msxVendorID,#VendorID   ; store vendor ID
+        mov     msxBatchNo,#hw_number_batch
+        mov     msxSerialNo,#hw_number_serial
+TestLED:
+        mov     r7,#6
+        mov     r6,#0FFh
+        mov     r4,#0
+        mov     r3,#0
+tl_loop:
+        mov     a,r6
+        xrl     a,#3
+        mov     r6,a
+        mov     outPort,a
+        mov     r5,#(2*quartz/12)
+tl_wait:
+        djnz    r3,$
+        djnz    r4,tl_wait
+        djnz    r5,tl_wait
+        djnz    r7,tl_loop     
+        ret
+;*******************************************************************************
+ShowStatus:
+        mov     c,mouseReady    ; mouse ready status
+        anl     c,/swLedOff     ; show status ?
+        cpl     c
+        mov     ledGreen,c      ; set LED out (0=light, 1=dark)
+
+        mov     c,swJoyMode     ; joystick mode status
+        mov     joystickMode,c  ; store joystick mode (1=enable)
+IF (JOY_LED_FLASH=1)        
+        anl     c,joystickUp
+        anl     c,joystickDown
+        anl     c,joystickLeft
+        anl     c,joystickRight
+ENDIF
+        anl     c,/swLedOff     ; show status ?
+        cpl     c
+        mov     ledRed,c        ; set LED out 
+        
+        ret
+;*******************************************************************************
+ReadDipSwitch:
+IF (JOY_MODE=0)
+        mov     a,inPort        ; get joystick mode resolution
+        anl     a,#003h         ; calculate value for scaling
+        xrl     a,#003h
+        inc     a               ; 4=1/4, 3=1/2, 2=3/4, 1=Full
+
+        mov     b,#joyDeltaMin  ; scale joyDeltaMin
+        mul     ab              ; joyDeltaMinSc = (joyDeltaMin * acc) div 4
+        mov     c,b.0           ; 9th bit of multiply result   
+        rrc     a               ; div 2
+        mov     c,b.1           ; 10th bit of multiply result
+        rrc     a               ; div 4
+        mov     joyDeltaMinSc,a ; store scaled value to compare
+ENDIF
+IF (JOY_MODE=1)
+        mov     a,#joyDeltaMin  ; sensitivity mode 1 
+        jb      swSense,cs1_dms  
+        clr     c               ; if high sensitivity
+        rrc     a               ; then delta div 2
+cs1_dms:
+        mov     joyDeltaMinSc,a ; store scaled value to compare
+        
+        jb      swPulseWith,cs1_pwn
+        TMR_CALC_JOY    2       ; long pulse time
+        ret
+cs1_pwn:
+        TMR_CALC_JOY    1       ; normal pulse time
+ENDIF
+IF (JOY_MODE=2)
+        jb      swSense,cs2_snn         ; sensitivity
+        mov     a,#joyDeltaHigh
+        sjmp    cs2_sns
+cs2_snn:
+        mov     a,#joyDeltaLow
+cs2_sns:
+        mov     joyDeltaMinSc,a
+        
+        jb      swInerLvl,cs2_inn       ; inertia
+        mov     a,#joyInerHigh
+        sjmp    cs2_ins
+cs2_inn:
+        mov     a,#joyInerLow
+cs2_ins:
+        mov     joyInerVal,a
+ENDIF
+IF (JOY_MODE=3)
+        jb      swSense,cs3_snn         ; sensitivity
+        mov     a,#joyDeltaHigh
+        sjmp    cs3_sns
+cs3_snn:
+        mov     a,#joyDeltaLow
+cs3_sns:
+        mov     joyDeltaMinSc,a
+        
+        jb      swSense,cs3_acn         ; acceleration
+        mov     a,#joyAccHigh
+        sjmp    cs3_acs
+cs3_acn:
+        mov     a,#joyAccLow
+cs3_acs:
+        mov     joyAccVal,a
+        
+        mov     c,swDC                  ; diagonal correction
+        cpl     c
+        mov     joystickDC,c
+ENDIF
+        ret
+;*******************************************************************************
+JoystickEmu:
+        clr     joystickXS      ; 0 = left
+        mov     a,msxX
+        jnb     acc.7,je_storex ; test X sign
+        cpl     joystickXS      ; 1 = right, store X sign
+        cjne    a,#080h,je_negx
+        inc     a               ; for correct negation if X=-128
+je_negx:
+        cpl     a               ; X:=-X
+        inc     a               ; result correction
+je_storex:                
+        mov     joystickX,a     ; store abs(delta X)
+        
+        clr     joystickYS      ; 0 = up
+        mov     a,msxY
+        jnb     acc.7,je_storey ; test Y sign
+        cpl     joystickYS      ; 1 = down, store Y sign
+        cjne    a,#080h,je_negy
+        inc     a               ; for correct negation if Y=-128
+je_negy:
+        cpl     a               ; Y:=-Y
+        inc     a               ; result correction
+je_storey:                
+        mov     joystickY,a     ; store abs(delta Y)
+
+        orl     outBuff,#0F0h
+IF (JOY_MODE=0 OR JOY_MODE=1)        
+        mov     a,joystickX
+        clr     c
+        subb    a,joyDeltaMinSc
+        jc      je_testy        ; if abs(delta X) < DeltaMinSc then CY=0
+        mov     c,joystickXS
+        mov     joystickLeft,c  ; if CY=0 then left else right
+        cpl     c
+        mov     joystickRight,c        
+je_testy:        
+        mov     a,joystickY
+        clr     c
+        subb    a,joyDeltaMinSc
+        jc      je_exit        ; if abs(delta Y) < DeltaMinSc then CY=0
+        mov     c,joystickYS
+        mov     joystickUp,c   ; if CY=0 then up else down
+        cpl     c
+        mov     joystickDown,c                
+je_exit:        
+ENDIF
+IF (JOY_MODE=2 OR JOY_MODE=3)
+        anl     joystickData,#03Fh      ; reset cmpXS & cmpYS
+        mov     a,joystickData
+        rl      a
+        rl      a                       ; shift joyCntXS & joyCntYS
+        mov     r1,a                    ; temporary store
+        rl      a
+        rl      a                       ; shift joystickXS & joystickYS
+        anl     a,#0C0h                 ; leave only needed bits
+        mov     r0,a                    ; store joystickXS & joystickYS
+        
+        mov     a,r1                    ; the same for joyCnt's 
+        anl     a,#0C0h                 ; leave only needed bits
+        xrl     a,r0                    ; compare joystick Signs | joyCnt Signs
+        orl     joystickData,a          ; store cmpXS & cmpYS (0=equal,1=differ)
+ENDIF        
+IF (JOY_MODE=2)
+        jnb     cmpXS,je2_xc            ; if joystickXS <> joyCntXS
+        mov     joyCntX,#0              ; then joyCntX := 0
+        mov     c,joystickXS
+        mov     joyCntXS,c              ; joyCntXS := joystickXS
+je2_xc:
+        mov     a,joystickX             ; acc := abs(delta X)
+je2_xl:        
+        clr     c                       ; repeat
+        subb    a,joyDeltaMinSc         ;   acc := acc - DeltaMin
+        jc      je2_xr           
+        inc     joyCntX                 ;   if acc > 0 then inc(joyCntX)
+        sjmp    je2_xl                  ; until (acc < 0)
+je2_xr:
+        mov     a,joyInerVal    
+        cjne    a,joyCntX,je2_xrt       ; if joyCntX > joyInerVal
+je2_xrt:
+        jnc     je2_ys
+        mov     joyCntX,joyInerVal      ; then joyCntX := joyInerVal
+
+je2_ys:
+        jnb     cmpYS,je2_yc            ; if joystickYS <> joyCntYS
+        mov     joyCntY,#0              ; then joyCntY := 0
+        mov     c,joystickYS
+        mov     joyCntYS,c              ; joyCntYS:=joystickYS
+je2_yc:
+        mov     a,joystickY             ; acc := abs(delta Y)
+je2_yl:        
+        clr     c                       ; repeat
+        subb    a,joyDeltaMinSc         ;   acc := acc - DeltaMin
+        jc      je2_yr           
+        inc     joyCntY                 ;   if acc > 0 then inc(joyCntY)
+        sjmp    je2_yl                  ; until (acc < 0)
+je2_yr:
+        mov     a,joyInerVal    
+        cjne    a,joyCntY,je2_yrt       ; if joyCntY > joyInerVal
+je2_yrt:
+        jnc     je23_out
+        mov     joyCntY,joyInerVal      ; then joyCntY := joyInerVal
+ENDIF
+IF (JOY_MODE=3)
+        jnb     cmpXS,je3_xc            ; if joystickXS <> joyCntXS
+        mov     joyCntX,#0              ; then joyCntX := 0
+        mov     c,joystickXS
+        mov     joyCntXS,c              ; joyCntXS := joystickXS
+je3_xc:
+        jnb     cmpYS,je3_yc            ; if joystickYS <> joyCntYS
+        mov     joyCntY,#0              ; then joyCntY := 0
+        mov     c,joystickYS
+        mov     joyCntYS,c              ; joyCntYS:=joystickYS
+je3_yc:
+        clr     dcX                     ; reset diagonal corrections vars
+        clr     dcY     
+        mov     a,joyCntY               ; if joyCntY = 0
+        jz      je3_dgend
+        mov     a,joyCntX               ; or joyCntX = 0
+        jz      je3_dgend               ; then do nothing
+        cjne    a,joyCntY,je3_dgdif     ; compare joyCntX & joyCntY
+        sjmp    je3_dgend               ; if equal then do nothing
+je3_dgdif:
+        mov     dcY,c                   ; if Y > X then set dcY
+        cpl     c                       ; else
+        mov     dcX,c                   ; set dcX
+je3_dgend:
+        mov     a,joystickX             ; acc := abs(delta X)
+        clr     c                       ; 
+        subb    a,joyDeltaMinSc         ; acc := acc - DeltaMin
+        jc      je3_ys                  ; if acc < 0 then test delta Y
+        inc     joyCntX                 ; else inc(joyCntX)
+je3_xl:        
+        clr     c                       ; repeat
+        subb    a,joyAccVal             ;   acc := acc - DeltaMin
+        jc      je3_xr                  ;   if acc < 0 then break loop
+        inc     joyCntX                 ;   else inc(joyCntX)
+        sjmp    je3_xl                  ; until (acc < 0)
+je3_xr:
+        mov     a,#joyIner    
+        cjne    a,joyCntX,je3_xrt       ; if joyCntX > joyInerVal
+je3_xrt:
+        jnc     je3_xdc
+        mov     joyCntX,#joyIner        ; then joyCntX := joyInerVal
+je3_xdc:        
+        jnb     joystickDC,je3_ys       ; if diagonal correction is ON
+        jnb     dcX,je3_ys              ; and X will be correct
+        mov     a,joyCntX               ; 
+        clr     c
+        rrc     a                       ; then cntX:=cntX div 2
+        mov     joyCntX,a
+        
+je3_ys:
+        mov     a,joystickY             ; acc := abs(delta Y)
+        clr     c                       ; 
+        subb    a,joyDeltaMinSc         ; acc := acc - DeltaMin
+        jc      je23_out                ; if acc < 0 then out results
+        inc     joyCntY                 ; else inc(joyCntY)
+je3_yl:        
+        clr     c                       ; repeat
+        subb    a,joyAccVal             ;   acc := acc - DeltaMin
+        jc      je3_yr                  ;   if acc < 0 then break loop
+        inc     joyCntY                 ;   else inc(joyCntY)
+        sjmp    je3_yl                  ; until (acc < 0)
+je3_yr:
+        mov     a,#joyIner     
+        cjne    a,joyCntY,je3_yrt       ; if joyCntY > joyInerVal
+je3_yrt:
+        jnc     je3_ydc
+        mov     joyCntY,#joyIner        ; then joyCntY := joyInerVal
+je3_ydc:
+        jnb     joystickDC,je23_out     ; if diagonal correction is ON
+        jnb     dcY,je23_out            ; and Y will be correct
+        mov     a,joyCntY               ; 
+        clr     c
+        rrc     a                       ; then cntY:=cntY div 2
+        mov     joyCntY,a
+ENDIF
+je23_out:
+IF (JOY_MODE=2 OR JOY_MODE=3)
+        mov     a,joyCntX               ; if joyCntX > 0
+        jz      je23_testy
+        dec     joyCntX                 ; then dec(joyCntX)
+        mov     c,joyCntXS
+        mov     joystickLeft,c          ; if CY=0 then left else right
+        cpl     c
+        mov     joystickRight,c        
+je23_testy:        
+        mov     a,joyCntY               ; if joyCntY > 0
+        jz      je23_exit
+        dec     joyCntY                 ; then dec(joyCntY)
+        mov     c,joyCntYS
+        mov     joystickUp,c   ; if CY=0 then up else down
+        cpl     c
+        mov     joystickDown,c                
+je23_exit:        
+ENDIF
+        mov     outPort,outBuff ; set output port
+        ret
+;*** end of {emio.sub} *********************************************************
