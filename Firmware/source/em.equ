@@ -1,0 +1,317 @@
+;*** EnterMice definitions & macros ********************************************
+EMULATOR        equ     0
+EMU_JOY_TEST    equ     0
+JOY_LED_FLASH   equ     1 ; jostick mode status LED 0 = light, 1 = flashing
+JOY_MODE        equ     3 ; 0 - 4-level sensitivity (low 40,30,20,full 10)
+                          ;     fixed pulse (20ms) 
+                          ; 1 - 2-level sensitivity (normal 10,high 5)
+                          ;     2-level pulse with (normal 30ms,long 60ms)
+                          ; 2 - 2-level sensitivity (normal 20,high 8)
+                          ;     fixed pulse (20ms)
+                          ;     2-level inertia (low 8 pulses,high 20 pulses) 
+                          ; 3 - 2-level sensitivity (normal 20,high 5) 
+                          ;     fixed pulse (30ms)
+                          ;     fixed inertia (limit 30 pulses)
+                          ;     2-level acceleration (normal 8,high 1) 
+HV_SCROLL       equ     0 ; activate horizontal scroll wheel
+;*** SETUP *********************************************************************
+quartz          equ     12      ; MCU clock MHz
+mouseLongWait   equ     17*quartz/12 ; wait after mouse self-test (ca. 2000 ms)
+mouseComTout    equ     10500   ; PS/2 mouse timeout full communication [us]
+maxErrCnt       equ     3       ; PS/2 mouse max errors count before mouse reset
+msxComTout      equ     1500    ; MSX/Neos read timeout [us]
+IF (JOY_MODE=0)
+tmrJoystick     equ     25000   ; self-start in joystick mode (25 ms)
+joyDeltaMin     equ     40      ; minimal value of mouse move to close stick
+ENDIF                           ; range 4..126
+IF (JOY_MODE=1)
+tmrJoystick     equ     30000   ; self-start in joystick mode (30 ms)
+joyDeltaMin     equ     10      ; minimal value of mouse move to close stick
+ENDIF                           ; range 2..255                    
+IF (JOY_MODE=2)
+tmrJoystick     equ     20000   ; self-start in joystick mode (20 ms)
+joyDeltaLow     equ     20      ; sensitivity
+joyDeltaHigh    equ     8       ;
+joyInerLow      equ     8       ; level of inertia
+joyInerHigh     equ     20      ;
+ENDIF                      
+IF (JOY_MODE=3)
+tmrJoystick     equ     30000   ; self-start in joystick mode (30 ms)
+tmrJoyIdle      equ     mouseComTout+2000 ; faster polling when mouse not moves
+joyDeltaLow     equ     20      ; sensitivity
+joyDeltaHigh    equ     5       ;
+joyIner         equ     30      ; inertia limit (max pulses after mouse stops)
+joyAccLow       equ     8       ; acceleration
+joyAccHigh      equ     1       ;
+ENDIF                      
+;*******************************************************************************
+STACK           equ     048h    ; system stack 56 bytes (049h..07Fh)
+cputact         equ     quartz*1000/12 ; [ns]
+VendorID        equ     05Dh    ; EnterMice ID
+                                
+IF (EMULATOR=1)
+$include(test.equ)
+ENDIF
+IF (EMULATOR=1 OR EMU_JOY_TEST=1)
+;--- emulator extra resources -------
+P5              data    0F8H    ; P5
+P5b0            bit     0F8H
+P5b1            bit     0F9H
+P5b2            bit     0FAH
+P5b3            bit     0FBH
+P5b4            bit     0FCH
+P5b5            bit     0FDH
+P5b6            bit     0FEH
+P5b7            bit     0FFH
+;------------------------------------
+swJoyMode       bit     P5b4
+swLedOff        bit     P5b5
+swResH          bit     P5b1
+swResL          bit     P5b0
+inPort          data    P5      
+ELSE                            ; OFF=1, ON=0
+swJoyMode       bit     P3.7    ; DS2 ON (0) mouse, OFF (1)=joystick emulation
+swLedOff        bit     P3.5    ; DS3 ON (0) LED enabled1, OFF (1) LED disabled
+swResH          bit     P3.1    ; DS4 ON 1/    ON 2/   OFF 3/   OFF 4/
+swResL          bit     P3.0    ; DS5 ON   4  OFF   4   ON   4  OFF   4
+inPort          data    P3      ; input port (DipSwitch)
+ENDIF
+swSense         bit     swResH  ; OFF (1) normal, ON (0) high [JoyEmuMode 1,2,3]
+swPulseWith     bit     swResL  ; OFF (1) normal, ON (0) long [JoyEmuMode 1]
+swInerLvl       bit     swResL  ; OFF (1) low, ON (0) high [JoyEmuMode 2]
+swDC            bit     swResL  ; diagonal correction OFF (1), ON (0) [JoyEmuMode 3]
+
+outPort         data    P1              ; output port
+                                        ; bit addressable area !important!
+outBuffData     equ     02Fh                    ; data buffer byte address
+outBuffBit      equ     (outBuffData-020h)*8    ; data buffer bit address
+outBuff         data    outBuffData     ; data buffer to output
+ledRed          bit     outBuffBit      ; LED0
+ledGreen        bit     outBuffBit+1    ; LED1
+msxBtLeft       bit     outBuffBit+2    ; MSX mouse left button
+msxBtRight      bit     outBuffBit+3    ; MSX mouse right button
+msxData0        bit     outBuffBit+4    ; MSX mouse data bit 0 
+msxData1        bit     outBuffBit+5    ; MSX mouse data bit 1
+msxData2        bit     outBuffBit+6    ; MSX mouse data bit 2
+msxData3        bit     outBuffBit+7    ; MSX mouse data bit 3
+
+joystickMode    bit     068h            ; joystick mode flag
+joystickDC      bit     069h            ; joystick mode diagonal correction flag
+joystickUp      bit     msxData0        ; joystick mode directions
+joystickDown    bit     msxData1        ;
+joystickLeft    bit     msxData2        ;
+joystickRight   bit     msxData3        ;
+joystickX       data    040h            ; joystick X value
+joystickY       data    041h            ; joystick Y value
+joystickXS      bit     06Ah            ; joystick X sign
+joystickYS      bit     06Bh            ; joystick Y sign 
+joyDeltaMinSc   data    042h            ; scaled value to compare
+joyTmrL         data    043h            ; timer value [JoyEmuMode 1]
+joyTmrH         data    044h            ;
+joyCntX         data    joyTmrL         ; counter X [JoyEmuMode 2 & 3]
+joyCntY         data    joyTmrH         ; counter Y [JoyEmuMode 2 & 3]
+joyInerVal      data    045h            ; inertia limit [JoyEmuMode 2]
+joyCntXS        bit     06Ch            ; counter X sign [JoyEmuMode 2 & 3]
+joyCntYS        bit     06Dh            ; counter Y sign [JoyEmuMode 2 & 3]
+joyAccVal       data    joyInerVal      ; acceleration [JoyEmuMode 3]
+joystickData    data    02Dh            ; 
+cmpXS           bit     06Eh            ; temporary compare joystickS|joyCntS
+cmpYS           bit     06Fh            ; x51 have not bit XOR
+dcX             bit     076h            ; diagonal correction helper variables
+dcY             bit     077h            ;
+;*******************************************************************************        
+HDW_INT_START   MACRO   GPR_SET         ; hardware interrupt start
+                push    psw             ; save flags
+                push    acc             ; save accumulator
+IF (GPR_SET>=0) AND (GPR_SET<=3)
+GPR_PSW         SET     GPR_SET SHL 3   
+                mov     psw,#GPR_PSW    ; select registers set
+ENDIF
+ENDM    
+;-------------------------------------------------------------------------------                      
+HDW_INT_END     MACRO                   ; hardware interrupt end
+                pop     acc             ; restore accumulator
+                pop     psw             ; restore flags
+                reti                    ; return from interrupt
+ENDM    
+;*** PS/2 low layer service ****************************************************
+PS2RxCnt        data    017h    ; r7_2=11 bits rx counter         
+;    11   10    9    8    7    6    5    4    3    2    1
+; START,  D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,Podd,STOP
+PS2TxCnt        data    016h    ; r6_2=12 bits tx counter         
+;    12   11   10    9    8    7    6    5    4    3    2    1
+; START,  D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,Podd,STOP, ACK
+PS2RxBUF        data    015h    ; r5_2 rx buffer ptr            
+PS2TxBUF        data    014h    ; r4_2 tx buffer
+PS2ErrCnt       data    012h    ; r2_2 error counter >3 fail & init mouse
+PS2RdPtr        data    011h    ; r1_2 PS2RdPTR             
+PS2RxPtr        data    010h    ; r0_2 PS2RxPTR             
+PS2RxPE         bit     070h    ; bit PS2RxPE=0 parity
+                                ; after transmition rxPE=0 error, rxPE=1 OK
+PS2TxPE         bit     071h    ; bit PS2TxPE=0 parity 
+PS2Error        bit     072h    ; bit PS2Error=0
+PS2TxON         bit     073h    ; bit PS2TxON =0 receive, =1 transmit
+PS2RxON         bit     EX0     ; INT0
+PS2CLK          bit     INT0    ; CLK line
+PS2DAT          bit     P3.4    ; DATA line
+PS2RxAddr       equ     021h    ; buffer address for PS2 received data 
+ps2HostWait     equ     (100*quartz/12-12*12/quartz)/2 ; 100 us
+;-------------------------------------------------------------------------------                      
+PS2_VAR_INIT    MACRO
+        clr     PS2Error                ; +1            clear error 
+        mov     PS2RxPtr,#PS2RxAddr     ; +2            init buffer ptr
+        mov     PS2RdPtr,#PS2RxAddr     ; +2            init read ptr
+        mov     PS2RxCnt,#11            ; +2            init rx bit counter
+        mov     PS2TxCnt,#12            ; +2 = 9        init tx bit counter
+ENDM
+;*** Mouse poll timer service **************************************************
+TMR_START       MACRO   cTime           ; start timer [us]
+tmrT            set     cTime/12*quartz ; scaling depending on quartz
+tmrHL           set     (65535-tmrT+1)  ; calculate value for timer counter
+tmrH            set     tmrHL/256       ; calculate high
+tmrL            set     tmrHL-tmrH*256  ; and low byte
+                mov     TH0,#tmrH       ; +2    load timer
+                mov     TL0,#tmrL       ; +2
+                setb    ET0             ; +1    enable interrupt
+                setb    TR0             ; +1    start timer
+ENDM
+;-------------------------------------------------------------------------------        
+TMR_CALC_JOY    MACRO   n                     ; 1 - normal, 2 - long (range!)
+tmrT            set     tmrJoystick/12*quartz ; scaling depending on quartz
+tmrHL           set     (65535-tmrT*n+1)      ; calculate value for timer counter
+tmrH            set     tmrHL/256             ; calculate high
+tmrL            set     tmrHL-tmrH*256        ; and low byte
+                mov     joyTmrH,#tmrH
+                mov     joyTmrL,#tmrL
+ENDM
+;-------------------------------------------------------------------------------
+TMR_START_JOY   MACRO                   ; start joystick emulation timer
+                mov     TH0,joyTmrH     ; +2    load timer
+                mov     TL0,joyTmrL     ; +2
+                setb    ET0             ; +1    enable interrupt
+                setb    TR0             ; +1    start timer
+ENDM                  
+;-------------------------------------------------------------------------------        
+TMR_END         MACRO                   
+                clr     TR0             ; stop timer
+                clr     ET0             ; disable interrupt
+ENDM
+;*** MSX service ***************************************************************
+MSXCnt          data    00Fh            ; r7_1 nibble counter
+MSXrxON         bit     EX1             ; interrupt signal (every edge of RTS)
+msxData         equ     030h            ; calculated mouse data buffer
+msxX            data    msxData         ; X
+msxY            data    msxData+1       ; Y
+msxBtExt        data    msxData+2       ; buttons state & ID
+msxZ            data    msxData+3       ; Z
+                                          
+msxByteEx       equ     4               ; H number of extra bytes (included)
+msxInfoEx       data    msxData+4       ; L connected mouse ID (1111 no mouse)
+msxHwVer        data    msxData+5       ; hardware version info
+msxFwVer        data    msxData+6       ; firmware version info
+msxVendorID     data    msxData+7       ; vendor ID (EnterMice 5Dh)
+msxData8        data    msxData+8       ; reserved for future
+msxData9        data    msxData+9       ; 
+msxDataA        data    msxData+10      ; 
+msxDataB        data    msxData+11      ; 
+msxDataC        data    msxData+12      ; 
+msxDataD        data    msxData+13      ; 
+msxSerialNo     data    msxData+14      ; hardware serial number
+msxBatchNo      data    msxData+15      ; hardware batch number 
+;-------------------------------------------------------------------------------
+MSX_INIT_VARS   MACRO                   ; init calculated mouse data buffer
+                clr     a               ; +1
+                mov     MSXCnt,a        ; +1
+                mov     msxX,a          ; +1
+                mov     msxY,a          ; +1
+                mov     msxZ,a          ; +1
+                mov     msxBtExt,#010h  ; +2
+ENDM
+;-------------------------------------------------------------------------------
+MSX_ENABLE      MACRO                   ; enable MSX/Neos mouse mode
+                setb    MSXrxON
+ENDM
+;-------------------------------------------------------------------------------
+MSX_DISABLE     MACRO                   ; disable MSX/Neos mouse mode
+                clr     MSXrxON
+ENDM
+;*** PS/2 watchdog service *****************************************************
+WDT_START       MACRO   cTime           ; PS/2 watchdog timer start [us]
+wdtT            set     cTime/12*quartz ; scaling depending on quartz
+wdtHL           set     (65535-wdtT+1)  ; calculate value for timer counter
+wdtH            set     wdtHL/256       ; calculate high
+wdtL            set     wdtHL-wdtH*256  ; and low byte
+                mov     TH1,#wdtH       ; load timer
+                mov     TL1,#wdtL       ;
+                setb    ET1             ; enable interrupt
+                setb    TR1             ; start timer
+ENDM
+;-------------------------------------------------------------------------------        
+WDT_END         MACRO                   ; PS/2 watchdog timer stop
+                clr     TR1             ; stop timer
+                clr     ET1             ; disable interrupt
+ENDM
+;*** PS/2 mouse ****************************************************************
+mouseID         data    020h            ; PS/2 mouse ID =0 Generic
+                                        ;               =3 Scroll
+                                        ;               =4 Intellimouse
+                                        
+                                        ; bit addressable area !important!
+mouseCmd        data    PS2RxAddr       ; mouse response 
+mouseStateData  equ     PS2RxAddr+1             ; data buffer byte address
+mouseStateBit   equ     (mouseStateData-020h)*8 ; data buffer bit address
+mouseYovr       bit     mouseStateBit+7 ; Y overflow
+mouseXovr       bit     mouseStateBit+6 ; X overflow
+mouseYsgn       bit     mouseStateBit+5 ; Y sign
+mouseXsgn       bit     mouseStateBit+4 ; X sign
+mouseBtMiddle   bit     mouseStateBit+2 ; Button 3 (middle) 1=pressed
+mouseBtRight    bit     mouseStateBit+1 ; Button 2 (right)
+mouseBtLeft     bit     mouseStateBit   ; Button 1 (left)
+mouseX          data    PS2RxAddr+2     ; X counter 0..255
+mouseY          data    PS2RxAddr+3     ; Y counter 0..255
+mouseZData      equ     PS2RxAddr+4
+mouseZBit       equ     (mouseZData-020h)*8
+mouseZ          data    mouseZData      ; Z counter -8..7 (4 least bits only)
+mouseZsgn       bit     mouseZBit+3     ; Z sign
+mouseBt4        bit     mouseZBit+4     ; Button 4 (Intellimouse only)
+mouseBt5        bit     mouseZBit+5     ; Button 5 (Intellimouse only)
+mouseZMXsgn     bit     mouseZBit+5     ; wheels sign (Explorer Mouse only)
+mouseZH         bit     mouseZBit+6     ; Horizontal wheel (Explorer Mouse only)
+mouseZV         bit     mouseZBit+7     ; Vertical wheel (Explorer Mouse only)
+mouseReady      bit     074h            ; =1 mouse initialized, =0 mouse problem 
+mousePollReq    bit     075h            ; mouse poll request (active=1)
+;*******************************************************************************
+PS2_OUT         MACRO   cOut,cTime      ; send PS/2 command & set timeout [us]
+                WDT_START       cTime   ; set timeout
+                mov     a,#cOut         ; store command
+                acall   ps2out          ; call routine {ps2svc.sub}
+ENDM
+;*******************************************************************************
+L_PS2_WAIT_FOR  MACRO   cIn,aErr,SFX    ; helper for PS2_WAIT_FOR
+ps2_wait_for_loop_&SFX:                 
+                acall   ps2in           ; call routine {ps2svc.sub}
+                jc      ps2_wait_for_test_&SFX          ; if data then check
+                jnb     PS2Error,ps2_wait_for_loop_&SFX ; wait if not timeout
+ps2_wait_for_err_&SFX:  
+                ajmp    aErr                            ; jump if fail               
+ps2_wait_for_test_&SFX:                 
+                cjne    a,#cIn,ps2_wait_for_err_&SFX    ; test received data
+ENDM
+;-------------------------------------------------------------------------------
+PS2_WAIT_FOR    MACRO   cIn,aErr        ; wait for specified PS/2 data
+                L_PS2_WAIT_FOR  cIn,aErr,%$ ; auxiliary submacro                 
+ENDM                  
+;*******************************************************************************
+L_PS2_WAIT      MACRO   aErr,SFX        ; helper for PS2_WAIT
+ps2_wait_loop_&SFX:                 
+                acall   ps2in           ; call routine {ps2svc.sub}
+                jc      ps2_wait_exit_&SFX              ; end if receive data
+                jnb     PS2Error,ps2_wait_loop_&SFX     ; wait if not timeout
+                ajmp    aErr               
+ps2_wait_exit_&SFX:
+ENDM
+;-------------------------------------------------------------------------------
+PS2_WAIT        MACRO   aErr            ; wait for any PS/2 data
+                L_PS2_WAIT  aErr,%$     ; auxiliary submacro               
+ENDM                  
+;*** end of {em.equ} ***********************************************************
