@@ -1,3 +1,5 @@
+### VHDL code
+```
 ----------------------------------------------------------------------------------
 -- Create Date:    13:04:42 01/17/2016 
 -- Design Name:    EnterMice logic matrix
@@ -83,4 +85,4 @@ begin
 	    (KB(5) or J2_Fire3) and                             -- Joystick 2
             (KB(0) or M_Right);					-- Mouse button right
 end Behavioral;
-
+```
