@@ -1,0 +1,113 @@
+;*** PS/2 low layer service ****************************************************
+                                        ; tacts limit 60 @12MHz (120 @24MHz)
+ps2service:                             ; +4 interrupt system delay + jump
+        HDW_INT_START   2               ; +6  using set #2 of GPR
+        jb      PS2TxON,ps2host         ; +2
+ps2receiver:
+        cjne    r7,#11,ps2rx_ctrl2      ; +2  is START bit ?
+        clr     PS2RxPE                 ; +1  init parity
+        sjmp    ps2rx_dec               ; +2 
+ps2rx_ctrl2:     
+        cjne    r7,#2,ps2rx_ctrl1       ; +2  is parity bit ?
+        mov     c,PS2DAT                ; +1  get parity bit
+        jnc     ps2rx_dec               ; +2  parity control 
+        cpl     PS2RxPE                 ; +1  if data_bit=1 then complement
+        sjmp    ps2rx_dec               ; +2 
+ps2rx_ctrl1:
+        cjne    r7,#1,ps2rx_data        ; +2  is STOP bit ?
+        jb      PS2RxPE,ps2rx_store     ; +2  if not correct parity
+        setb    PS2Error                ; +1  then set error flag
+ps2rx_store:
+        mov     @r0,PS2RxBUF            ; +2  store byte in the buffer
+        inc     r0                      ; +1  increment buf ptr
+        mov     r7,#11                  ; +1  init bit counter for next service
+        sjmp    ps2rx_end               ; +2 
+ps2rx_data:
+        mov     c,PS2DAT                ; +1  get PS/2 DATA bit
+        jnc     ps2rx_odd               ; +2  parity control  
+        cpl     PS2RxPE                 ; +1  if data_bit=1 then complement 
+ps2rx_odd:
+        mov     a,r5                    ; +1  get buffered data
+        rrc     a                       ; +1  shift next data bit
+        mov     r5,a                    ; +1  store data
+ps2rx_dec:
+        dec     r7                      ; +1  decrement bit counter
+ps2rx_end:
+        jnb     PS2Error,ps2rx_end2     ; +2  if error
+        inc     r2                      ; +1  then increment error counter
+ps2rx_end2:
+        HDW_INT_END                     ; +6 = 27..37 tacts
+;-------------------------------------------------------------------------------
+ps2host:                                ; +12 host mode
+        cjne    r6,#12,ps2tx_ctrl3      ; +2  is START bit ?
+        setb    PS2TxPE                 ; +1  init parity
+        sjmp    ps2tx_dec               ; +2  
+ps2tx_ctrl3:     
+        cjne    r6,#3,ps2tx_ctrl2       ; +2  is parity bit ?
+        mov     c,PS2TxPE               ; +1  set parity bit
+        sjmp    ps2tx_set               ; +2  
+ps2tx_ctrl2:
+        cjne    r6,#2,ps2tx_ctrl1       ; +2  is STOP bit ?
+        setb    PS2DAT                  ; +1  set STOP bit
+        sjmp    ps2tx_dec               ; +2  
+ps2tx_ctrl1:
+        cjne    r6,#1,ps2tx_data        ; +2  is ACK bit ?
+        mov     c,PS2DAT                ; +1  get ACK bit
+        mov     PS2Error,c              ; +1  store ACK as error flag
+        clr     PS2TxON                 ; +1  disable transmitter
+        sjmp    ps2tx_end               ; +2  
+ps2tx_data:
+        mov     a,r4                    ; +1  get data to send
+        rrc     a                       ; +1  shift next bit to send
+        mov     r4,a                    ; +1  store rest of data
+        jnc     ps2tx_set               ; +2  parity control     
+        cpl     PS2TxPE                 ; +1  if 1 then complement
+ps2tx_set:
+        mov     PS2DAT,c                ; +1  set PS/2 DATA bit
+ps2tx_dec:
+        dec     r6                      ; +1  decrement bit counter
+ps2tx_end:
+        jnb     PS2Error,ps2tx_end2     ; +2  if error
+        inc     r2                      ; +1  then increment error counter
+ps2tx_end2:
+        HDW_INT_END                     ; +6 = 27..37 tacts
+;*******************************************************************************
+ps2in:  ; get byte from PS/2 data buffer
+; cy=1 then acc=received byte
+; cy=0 no data
+; using: acc,r1,cy
+        mov     a,PS2RxPtr              ; compare RxPtr & RdPtr
+        xrl     a,PS2RdPtr              ; data in buffer ?
+        clr     c                       ; if not, then clear CY
+        jz      ps2in_end               ; and return
+        mov     r1,PS2RdPtr             ; ptr to byte in buffer
+        mov     a,@r1                   ; read byte
+        inc     PS2RdPtr                ; increment read ptr
+        setb    c                       ; set CY, byte in acc
+ps2in_end:
+        ret
+;*******************************************************************************
+ps2out: ; send PS/2 byte 
+; acc=byte to send
+; using: acc,r1,cy
+        mov     PS2TxBUF,a              ; store data to send
+        clr     PS2RxON                 ; disable PS2 INT
+        clr     PS2CLK                  ; bring CLK line low for at least 100 us
+        PS2_VAR_INIT                    ; +9 us (@12MHz)  init variables
+        mov     r1,#ps2HostWait         ; +1  wait loop 88 us
+        djnz    r1,$                    ; +44*2 
+        setb    PS2TxON                 ; +1  enable transmitter
+        clr     PS2DAT                  ; +1  bring DATA line low (START bit)
+        setb    PS2CLK                  ; release CLK line
+        setb    PS2RxON                 ; enable PS2 INT
+        ret
+;*******************************************************************************
+PS2init:
+        clr     PS2RxON                 ; disable receiver INT
+        clr     PS2TxON                 ; disable transmitter
+        setb    PS2CLK                  ; release CLK line
+        setb    PS2DAT                  ; release DATA line
+        PS2_VAR_INIT                    ; init variables
+        setb    IT0                     ; edge triggered
+        ret 
+;*** end of {ps2svc.sub} *******************************************************
