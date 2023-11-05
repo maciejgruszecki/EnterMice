@@ -1,0 +1,259 @@
+;*** PS2 mouse *****************************************************************
+MouseInit:
+        orl     msxInfoEx,#00Fh         ; no mouse connected
+        mov     PS2ErrCnt,#0            ; reset error counter
+        clr     mouseReady
+        mov     r5,#3                   ; mouse reset 3 times
+mi_reset:                
+        PS2_OUT         0FFh,mouseComTout ; out FF - mouse reset
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        WDT_END
+        mov     r4,#mouseLongWait       ; long wait about 2000 ms
+mi_long_loop2:
+        mov     r3,#0                   ;
+mi_long_loop:
+        mov     r2,#0                   ;
+        djnz    r2,$                    
+        acall   ps2in                   ; wait for mouse init
+        jc      mi_test                 ; if mouse response then test result
+mi_next:
+        djnz    r3,mi_long_loop         ;
+        djnz    r4,mi_long_loop2        ;
+mi_init_err:  
+        setb    PS2Error                ; if timeout
+        ajmp    mi_err                  ; then mouse init fail               
+mi_test:                 
+        cjne    a,#0FCh,mi_test_ok      ; in AA or something? - self-test passed 
+	sjmp	mi_init_err		;    FC - fail 
+mi_test_ok:
+        WDT_START       mouseComTout
+        PS2_WAIT        mi_err          ; in  00 - mouse ID
+        djnz    r5,mi_reset
+
+        PS2_OUT         0F5h,mouseComTout ; out F5 - disable data reporting
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         0C8h,mouseComTout ; out C8 - sample rate value 200
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         064h,mouseComTout ; out 64 - sample rate value 100
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         050h,mouseComTout ; out 50 - sample rate value 80
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F2h,mouseComTout ; out F2 - read device type
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_WAIT        mi_err          ; in  00 - standard mouse
+                                        ; in  03 - microsoft scrolling mouse 
+        mov     mouseID,a               ; store mouse ID
+        jnz     mi_scrl                 ; commands only for generic mouse
+
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         00Ah,mouseComTout ; out 0A - sample rate value 10
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F2h,mouseComTout ; out F2 - read device type
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_WAIT        mi_err          ; in  00 - mouse ID
+        mov     mouseID,a               ; optional
+mi_finish_long:
+        ajmp            mi_finish
+mi_scrl:
+        cjne    a,#3,mi_finish_long
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         0C8h,mouseComTout ; out C8 - sample rate value 200
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         0C8h,mouseComTout ; out C8 - sample rate value 200
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         050h,mouseComTout ; out 50 - sample rate value 80
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F2h,mouseComTout ; out F2 - read device type
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_WAIT        mi_err          ; in  03 - microsoft scrolling mouse
+                                        ; in  04 - microsoft intellimouse
+        mov     mouseID,a               ; store mouse ID        
+                                        
+IF (HV_SCROLL=1)
+        cjne    a,#4,mi_finish          ; enable horizontal wheel Explorer Mouse
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         0C8h,mouseComTout ; out C8 - sample rate value 200
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         050h,mouseComTout ; out 50 - sample rate value 80
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         028h,mouseComTout ; out 50 - sample rate value 40
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+ENDIF
+mi_finish:
+        mov     a,mouseID
+        anl     a,#00Fh
+        cjne    a,#00Fh,mi_store_info
+        mov     a,#00Dh                 ; if mouse ID=xFh then set to 0Dh
+mi_store_info:
+        anl     msxInfoEx,#0F0h
+        orl     msxInfoEx,a             ; store msxMouseID
+IF (EMULATOR=1)
+        mov     a,mouseID               ; store mouse ID        
+        acall   WriteHex
+ENDIF
+        PS2_OUT         0E8h,mouseComTout ; out E8 - set resolution
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         003h,mouseComTout ; out 03 - resolution value 8 counts/mm
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0E6h,mouseComTout ; out E6 - set scalling 1:1
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+  
+        PS2_OUT         0F3h,mouseComTout ; out F3 - set sample rate
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+        PS2_OUT         028h,mouseComTout ; out 28 - sample rate value 40
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        PS2_OUT         0F0h,mouseComTout ; out F0 - set remote mode
+        PS2_WAIT_FOR    0FAh,mi_err     ; in  FA - mouse aknowledge
+
+        WDT_END                         ; stop watchdog timer
+
+IF (EMULATOR=1)
+        mov     a,#'+'
+        acall   RSout
+ENDIF
+        setb    mouseReady              ; set mouse ready flag
+        setb    c                       ;
+        ret
+mi_err:        
+        WDT_END                         ; if timeout stop watchdog timer
+IF (EMULATOR=1)
+        mov     a,#'-'
+        acall   RSout
+ENDIF
+        inc     PS2ErrCnt               ; increment error counter
+        clr     c                       ;
+        ret                
+;*******************************************************************************
+MousePoll:
+        jnb     mouseReady,mp_err       ; check if mouse is ready to poll
+        PS2_OUT         0EBh,mouseComTout ; out E8 - read data
+        PS2_WAIT        mp_err          ; in mouse ACK (FA) or Resend (FE)
+        cjne    a,#0FEh,mp_next
+        PS2_OUT         0EBh,mouseComTout ; out E8 - read data
+        PS2_WAIT        mp_err          ; in mouse ACK (FA)        
+        cjne    a,#0FAh,mp_err
+mp_next:
+        PS2_WAIT        mp_err          ; in mouse state
+        PS2_WAIT        mp_err          ; in mouse X
+        PS2_WAIT        mp_err          ; in mouse Y
+        mov     a,mouseID
+        jz      mp_end
+        PS2_WAIT        mp_err          ; in mouse Z
+mp_end:        
+        mov     PS2ErrCnt,#0            ; reset error counter
+        clr     mousePollReq            ; clear mouse poll request flag
+        setb    c
+        ret      
+mp_err:                                 ; if error or timeout
+        inc     PS2ErrCnt               ; increment mouse error counter
+        acall   MouseTest               ; test error counter
+        clr     c
+        ret
+;*******************************************************************************
+MouseTest:
+        mov     a,PS2ErrCnt
+        cjne    a,#maxErrCnt,mt_gt      ; if error counter > max (see em.equ)
+mt_gt:  
+        jc      mt_end
+        clr     mouseReady              ; then attempt to mouse reset    
+mt_end:
+        mov     c,mouseReady
+        ret
+;*******************************************************************************
+MouseCalc:
+        mov     a,mouseX        ; X
+        rl      a
+        mov     c,mouseXsgn     ; insert 9th sign bit at MSB bit
+        rrc     a               
+        cjne    a,#080h,mc_negx
+        inc     a               ; for correct negation if X=-128
+mc_negx:
+        cpl     a               ; X:=-X
+        inc     a               ; result correction
+        mov     msxX,a          ; store delta X (positive is move left)
+        
+        mov     a,mouseY        ; Y
+        rl      a
+        mov     c,mouseYsgn     ; insert 9th sign bit at MSB bit
+        rrc     a
+        mov     msxY,a          ; store delta Y (positive is move up)
+        
+        mov     c,mouseBtLeft   ; left button
+        cpl     c
+        mov     msxBtLeft,c     ; store left button state
+        
+        mov     c,mouseBtRight  ; right button
+        cpl     c
+        mov     msxBtRight,c    ; store right button state
+        
+        mov     a,mouseID       ; test mouse type
+        jnz     mc_calc_ext
+        mov     a,#008h         ; standard mouse
+        mov     c,mouseBtMiddle
+        rlc     a               ; acc = 0001 000c
+        mov     msxBtExt,a      ; store mouse button 3 (middle)
+        mov     msxZ,#0         ; store Z=0
+        ret
+mc_calc_ext:                    ; scroll or intellimouse
+        mov     a,mouseZ        ; Z
+        anl     a,#00Fh         ; leave only 4 LSB bits
+        cjne    a,#008h,mc_negz
+        inc     a               ; for correct negation if Z=-8
+mc_negz:
+        cpl     a               ; Z:=-Z
+        inc     a               ; result correction
+        jb      acc.3,mc_zminus ; fill sign bits
+        anl     a,#00Fh         ; positive value
+        sjmp    mc_storez
+mc_zminus:
+        orl     a,#0F0h         ; copy sign bit, negative value
+mc_storez:
+        mov     msxZ,a          ; store delta Z (positive is wheel move up)
+
+        mov     a,mouseID       ; test mouse type 
+        cjne    a,#4,mc_scrl
+        mov     a,#002h         ; intellimouse
+        mov     c,mouseBt5      
+        rlc     a               ; acc = 0000 010c
+        mov     c,mouseBt4      
+        rlc     a               ; acc = 0000 10cc
+        mov     c,mouseBtMiddle
+        rlc     a               ; acc = 0001 0ccc
+        mov     msxBtExt,a      ; store mouse buttons 3, 4, 5
+        ret
+mc_scrl:                        
+        mov     a,#008h         ; scroll mouse
+        mov     c,mouseBtMiddle
+        rlc     a               ; acc = 0001 000c
+        mov     msxBtExt,a      ; store mouse button 3 (middle)
+        ret
+;*** end of {ps2mouse.sub} *****************************************************
