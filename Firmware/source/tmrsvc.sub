@@ -1,0 +1,36 @@
+;*** Mouse poll timer service **************************************************
+tmrservice:                             ; +4  interrupt system delay + jump
+        HDW_INT_START   1               ; +6  using set #1 of GPR
+        jnb     joystickMode,tmr_msx    ; +2  in joystick mode
+IF (JOY_MODE=0 OR JOY_MODE=2)
+        TMR_START       tmrJoystick     ; +6  restart timer
+ENDIF
+IF (JOY_MODE=1)
+        TMR_START_JOY                   ; +6  restart timer
+ENDIF   
+IF (JOY_MODE=3)
+        mov     a,joyCntX               ; +1
+        orl     a,joyCntY               ; +1
+        jz      tmr_idle                ; +2 if mouse not moves then short time
+        TMR_START       tmrJoystick     ; +6  restart timer
+        sjmp    tmr_poll                ; +2                
+tmr_idle: 
+        TMR_START       tmrJoyIdle      ; +6 
+ENDIF
+        sjmp    tmr_poll                ; +2  and request to mouse poll
+tmr_msx:
+        TMR_END                         ; +2  in mouse mode stop timer
+        mov     a,outBuff               ; +1  
+        orl     a,#0F0h                 ; +1
+        mov     outPort,a               ; +1  release mouse data output
+        mov     outBuff,a               ; +1
+        MSX_INIT_VARS                   ; +6
+tmr_poll:    
+        setb    mousePollReq            ; +1  request to mouse poll in main loop
+tmr_exit:  
+        HDW_INT_END                     ; +6 = 29..39 tacts (JoyMode3 +4 tacts)
+;*******************************************************************************        
+TMRinit:
+        TMR_END
+        ret 
+;*** end of {tmrsvc.sub} *******************************************************
