@@ -1,0 +1,237 @@
+;*******************************************************************************
+;* EnterMice Joystick & PS/2 Mouse Interface for Enterprise 64/128             *
+;* © 2015 pear                                                                 *
+;* Please do not share this source code without my permission. Thank you.      * 
+;*******************************************************************************
+hw_number_serial        equ     0
+hw_number_batch         equ     1
+fw_ver_major            equ     1
+fw_ver_minor            equ     9
+hw_ver_major            equ     1
+hw_ver_minor            equ     0
+;*******************************************************************************
+$title(EnterMice v1.9)
+$nopaging
+$list
+$object
+$nosymbols
+$nodebug
+;*** v 1.9 changes (2015-11-18) ************************************************
+;- added extended information about interface to MSX protocol
+;- readdress variables
+;*** v 1.8b changes (2015-11-15) ***********************************************
+;- improved joystick emulation JoystickEmu, diagonal correction
+;*** v 1.7 changes (2015-11-07) ************************************************
+;- improved joystick emulation (tmrsvc.sub), add tmrJoyIdle
+;*** v 1.6 changes (2015-10-30) ************************************************
+;- improved joystick emulation (CalcSense)
+;- change reversal DipSwitch 2
+;*** v 1.5 changes (2015-10-29) ************************************************
+;- improved joystick emulation (CalcSense)
+;- joystick mode status LED flashing if any stick is active
+;*** v 1.4 changes (2015-10-27) ************************************************
+;- improved joystick emulation (CalcSense [new])
+;- added status LEDs test
+;*** v 1.3 changes (2015-10-24) ************************************************
+;- improved Microsoft Intellimouse Explorer initialization (MouseInit)
+;*** v 1.2 changes (2015-10-22) ************************************************
+;- fixed Microsoft Intellimouse Explorer initialization (MouseInit)
+;- increase joystick mode timer cycle to 25 ms (before 20 ms)
+;- increase mouseComTout time to 10,5 ms (before 9,5 ms)
+;*** v 1.1 changes (2015-10-21) ************************************************
+;- improved refresh of LED status, independently of the STROBE signal (MainLoop)
+;- added time constants conversion depending on the frequency of quartz
+;- fixed incorrect correction at reversing the sign of value
+;  (MouseCalc & JoystickEmu)
+;- fixed inverted states of the buttons Middle, Bt4 and Bt5 (MouseCalc) 
+;- extended timeout for mouse self-test procedure (for 2000ms) (MouseInit)
+;- fixed MSX_INIT_VARS
+;*** v 1.0 (2015-10-05) ********************************************************
+$modc2051
+$include(em.equ)                        ; definitions & macros
+;*******************************************************************************
+                CSEG                    ; start of binary code
+                org     00000h
+                ljmp    start
+;*** int0 **********************************************************************
+                org     00003h
+                ljmp    ps2service
+;*** timer0 ********************************************************************
+                org     0000Bh
+                ljmp    tmrservice
+;*** int1 **********************************************************************
+                org     00013h
+                ljmp    msxservice
+;*** timer1 ********************************************************************
+                org     0001Bh
+                ljmp    wdtservice
+;*** serial ********************************************************************
+IF (EMULATOR=1)
+                org     00023h
+                ljmp    serial
+ENDIF
+;*******************************************************************************
+$include(ps2svc.sub)                    ; subroutines           
+$include(tmrsvc.sub)
+$include(msxsvc.sub)
+$include(wdtsvc.sub)
+$include(ps2mouse.sub)
+$include(emio.sub)
+IF (EMULATOR=1)
+$include(serial.sub)
+ENDIF
+;*** main **********************************************************************
+start:                                  ; system initialization          
+                mov     SP,#STACK       ; set stack addr
+                mov     TMOD,#00010001b ; T0 mode 1,T1 mode 1
+                mov     IP,#00000001b   ; INT0 (PS/2) higher priority
+                acall   WDTinit         ; initialize PS/2 watchdog timer
+                acall   TMRinit         ; initialize mouse poll timer
+                acall   PS2init         ; initialize PS/2 low layer service
+                acall   MSXInit         ; initialize MSX/Neos mouse service
+                clr     mouseReady      ; request to mouse init
+                mov     a,#0FFh
+                mov     outBuff,a       ; reset data buffer
+                mov     outPort,a       ; and output port
+IF (EMULATOR=1)                
+                mov     SCON,#01010000b ; serial mode 1
+                orl     PCON,#10000000b
+                setb    BD              ; 80C535 BD+SMOD RS 9600 pbs @12MHz
+                acall   RSInit          ; RS-232 init in test mode
+                mov     r7,#9*quartz/12
+ENDIF
+                acall   SelfTest
+IF (JOY_MODE=2 OR JOY_MODE=3)
+                mov     joyCntX,#0
+                mov     joyCntY,#0
+                clr     joyCntXS
+                clr     joyCntYS
+ENDIF
+                setb    EA              ; enable global interrupts
+;*** main loop *****************************************************************
+MainLoop:               
+                acall   ShowStatus
+                acall   ReadDipSwitch
+                                                
+                jb      mouseReady,ml_read_mouse
+                MSX_DISABLE
+                mov     a,outBuff
+                orl     a,#0FCh         
+                mov     outPort,a       ; set output port
+                mov     outBuff,a       ; reset mouse output bits
+                acall   MouseInit
+                jb      mouseReady,ml_read_mouse
+                MSX_INIT_VARS
+ml_read_mouse:
+IF (EMULATOR=0)
+                jnb     mousePollReq,ml_mode_select
+                acall   MousePoll       ; poll mouse data
+                jnc     ml_mode_select  ; if success    
+                acall   MouseCalc       ; then convert PS/2 to MSX/Neos
+ml_mode_select:
+                jb      joystickMode,ml_joy_mode ; test work mode
+                mov     outPort,outBuff ; set output port                
+                jb      MSXrxON,MainLoop
+                jnb     mouseReady,MainLoop
+                MSX_ENABLE              ; enable MSX/Neos external interrupt
+                sjmp    MainLoop        ; end of loop mouse mode
+ml_joy_mode:
+                MSX_DISABLE             ; if joy mode, then disconnect ext int
+                acall   JoystickEmu     ; convert values to sticks state  
+                jb      TR0,MainLoop            ; if timer not started
+IF (JOY_MODE=0 OR JOY_MODE=2 OR JOY_MODE=3)     ; then run it
+                TMR_START       tmrJoystick     
+ENDIF
+IF (JOY_MODE=1)
+                TMR_START_JOY 
+ENDIF           
+                sjmp    MainLoop        ; end of loop joystick mode
+ENDIF                
+;*** end of main loop **********************************************************
+IF (EMULATOR=1)
+                mov     r6,#0
+                djnz    r6,$
+
+                jb      PS2TXON,wt3
+                acall   MousePoll
+                jnc     wt2
+                acall   MouseCalc
+                acall   JoystickEmu
+wt3:
+                djnz    r7,MainLoop
+                mov     r7,#50*quartz/12
+
+                cpl     P5b2
+                mov     a,#10
+                acall   RSout
+                mov     a,#13
+                acall   RSout
+                mov     a,CtrlCnt
+                inc     a
+                mov     CtrlCnt,a
+                acall   WriteHex
+                
+                mov     r4,#6
+                mov     r0,#mouseID
+wt1:                
+                mov     a,@r0
+                acall   WriteHex
+                inc     r0
+                djnz    r4,wt1
+
+                mov     r4,#4
+                mov     r0,#msxData
+wt1a:                
+                mov     a,@r0
+                acall   WriteHex
+                inc     r0
+                djnz    r4,wt1a
+
+wt2:                            
+                mov     a,PS2ErrCnt
+                acall   WriteHex  
+                acall   MouseTest
+                jb      mouseReady,wt_end
+                acall   MouseInit
+wt_end:       
+                ajmp    MainLoop
+;*** end of emulator main loop *************************************************
+WriteHex:       push    acc
+                call    CnvD2H
+                mov     a,r2
+                acall   RSout
+                mov     a,r3
+                acall   RSout
+                mov     a,#20h
+                acall   RSout
+                pop     acc
+                ret
+;-------------------------------------------------------------------------------
+CnvD2H:         mov     r3,a              ;In a; Out r2,r3
+                swap    a
+                anl     a,#0Fh
+                add     a,#HexDig-PC1
+                movc    a,@a+PC
+PC1:            mov     r2,a
+                mov     a,r3
+                anl     a,#0Fh
+                add     a,#HexDig-PC2
+                movc    a,@a+PC
+PC2:            xch     a,r3
+                ret
+HexDig:         db     '0123456789ABCDEF'
+ENDIF
+;*** code inside description ***************************************************
+fwmj1           equ     '0'+fw_ver_major/10
+fwmj0           equ     '0'+fw_ver_major-10*(fw_ver_major/10)
+fwmi1           equ     '0'+fw_ver_minor/10     
+fwmi0           equ     '0'+fw_ver_minor-10*(fw_ver_minor/10)     
+hwmj1           equ     '0'+hw_ver_major/10
+hwmj0           equ     '0'+hw_ver_major-10*(hw_ver_major/10)
+hwmi1           equ     '0'+hw_ver_minor/10
+hwmi0           equ     '0'+hw_ver_minor-10*(hw_ver_minor/10)
+ProdInfo:       db      44,'EnterMice hardware v',hwmj1,hwmj0,'.',hwmi1,hwmi0
+                db      ', firmware v',fwmj1,fwmj0,'.',fwmi1,fwmi0,0
+Copyright:      db      11,0A9h,' 2015 pear',0
+;*** end of main ***************************************************************
+END
